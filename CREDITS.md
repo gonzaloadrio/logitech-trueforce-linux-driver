@@ -127,6 +127,10 @@ until the last round.
   build breakage ([#24](../../issues/24)) and the Le Mans Ultimate pedal
   binding problem through the logi-ffb virtual wheel
   ([#50](../../issues/50)).
+- **[sharkforce13](https://github.com/sharkforce13)** - the G923 PS
+  edition's oops on unplug and on module unload
+  ([#127](../../issues/127)), with the `modprobe -r` reproduction that
+  made it a bench bug rather than a hardware one.
 
 ## Kernels and distributions
 
