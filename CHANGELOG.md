@@ -7,6 +7,20 @@ the contract is "it works on RS50 and G Pro as listed here".
 
 ## Unreleased
 
+**A kernel oops on the G923 PS edition when the wheel is unplugged or the
+module unloaded, fixed.** The wheel's third interface carries its
+TrueForce stream and is started as a hidraw node only, with no input
+device. The HID core initialises a device's input list only when it
+connects an input, so that interface's list head stays zeroed, and the
+teardown added in 0.41.0 walked it on every interface to find the classic
+force-feedback input. The walk dereferenced NULL inside the USB hub
+worker, which died holding the bus lock, so every USB 2.0 port on the
+machine stopped enumerating until a reboot. Reported on power-off and on
+`modprobe -r` ([#127](../../issues/127)), reproduced on the maintainer's
+own wheel, and fixed by guarding every walk of that list the way the HID
+core does, on the interface having claimed an input. Verified under KASAN
+through three unplug and unload cycles.
+
 **The wheel's replies during TrueForce set-up are documented.** Every
 earlier capture here showed interface 2 mid-stream only; the Windows
 iRacing capture carries a whole session start in both directions, and it
