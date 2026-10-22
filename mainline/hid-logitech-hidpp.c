@@ -3773,6 +3773,21 @@ static void hidpp_ff_set_gain(struct input_dev *dev, u16 gain)
 }
 
 /*
+ * Whether hdev->inputs may be walked at all. Only hidinput_connect()
+ * initialises that list head, and it only runs when hid_hw_start() is
+ * given HID_CONNECT_HIDINPUT; hid_allocate_device() leaves the head
+ * zeroed. An interface started hidraw-only, such as the G923's TrueForce
+ * stream interface, therefore carries a NULL list head, and walking it
+ * dereferences NULL (issue #127: oops in hidpp_remove on unplug and
+ * rmmod with a G923 PS attached). The HID core guards every walk of this
+ * list with HID_CLAIMED_INPUT, and so does this driver.
+ */
+static bool hidpp_dd_has_inputs(const struct hid_device *hdev)
+{
+	return hdev->claimed & HID_CLAIMED_INPUT;
+}
+
+/*
  * The force-feedback state for `hid`, following the wheel's cross-interface
  * layout: these sysfs attributes hang off the HID++ interface, while the
  * input device carrying the force-feedback state is on interface 0. Returns
@@ -3793,7 +3808,7 @@ static struct hidpp_ff_private_data *hidpp_ff_data_for(struct hid_device *hid)
 				hid = hid0;
 		}
 	}
-	if (list_empty(&hid->inputs))
+	if (!hidpp_dd_has_inputs(hid) || list_empty(&hid->inputs))
 		return NULL;
 	hidinput = list_entry(hid->inputs.next, struct hid_input, list);
 	idev = hidinput->input;
@@ -4186,6 +4201,9 @@ static struct input_dev *hidpp_ff_classic_input_get(struct hid_device *hdev)
 {
 	struct hid_input *hi;
 
+	if (!hidpp_dd_has_inputs(hdev))
+		return NULL;
+
 	list_for_each_entry(hi, &hdev->inputs, list) {
 		struct input_dev *idev = hi->input;
 
@@ -4324,7 +4342,7 @@ static int hidpp_ff_init(struct hidpp_device *hidpp,
 		}
 	}
 
-	if (!hid || list_empty(&hid->inputs)) {
+	if (!hid || !hidpp_dd_has_inputs(hid) || list_empty(&hid->inputs)) {
 		hid_err(hid, "G920 FFB init: no inputs on target hid_device\n");
 		return -ENODEV;
 	}
@@ -9642,7 +9660,7 @@ static void hidpp_dd_ff_init_work(struct work_struct *work)
 	}
 
 	/* Check if input device has been registered */
-	if (list_empty(&input_hdev->inputs)) {
+	if (!hidpp_dd_has_inputs(input_hdev) || list_empty(&input_hdev->inputs)) {
 		if (ff->init_retries++ < HIDPP_DD_FF_MAX_INIT_RETRIES) {
 			queue_delayed_work(ff->wq, &ff->init_work,
 					   msecs_to_jiffies(HIDPP_DD_FF_INIT_RETRY_MS));
@@ -19948,9 +19966,11 @@ static void hidpp_remove(struct hid_device *hdev)
 			 */
 			struct hid_input *hi;
 
-			list_for_each_entry(hi, &hdev->inputs, list) {
-				if (hi->input && hi->input->ff)
-					hi->input->ff->private = NULL;
+			if (hidpp_dd_has_inputs(hdev)) {
+				list_for_each_entry(hi, &hdev->inputs, list) {
+					if (hi->input && hi->input->ff)
+						hi->input->ff->private = NULL;
+				}
 			}
 
 			/*
