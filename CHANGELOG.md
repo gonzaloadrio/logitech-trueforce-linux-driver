@@ -5,7 +5,7 @@ changes to the sysfs surface, minor versions add supported wheels or
 new attributes, patch versions are bug fixes and documentation. Pre-1.0
 the contract is "it works on RS50 and G Pro as listed here".
 
-## Unreleased
+## 0.42.6 - 2026-10-22
 
 **A kernel oops on the G923 PS edition when the wheel is unplugged or the
 module unloaded, fixed.** The wheel's third interface carries its
