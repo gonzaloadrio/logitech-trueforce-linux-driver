@@ -680,6 +680,38 @@ pub fn discover_shifter_input() -> Option<WheelInput> {
     scan_shifter_input(Path::new("/sys/class/input"))
 }
 
+/// Whether `name` looks like a Logitech RS Shifter & Handbrake (`046d:c278`).
+pub fn is_handbrake_name(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    upper.contains("RS SHIFTER & HANDBRAKE") || upper.contains("HANDBRAKE")
+}
+
+/// Scan `sysfs_input` for `event*` entries matching [`is_handbrake_name`].
+pub fn scan_handbrake_input(sysfs_input: &Path) -> Option<WheelInput> {
+    scan_input_by_name(sysfs_input, is_handbrake_name)
+}
+
+/// Find a standalone USB handbrake's evdev node, or `None` if not connected via USB.
+pub fn discover_handbrake_input() -> Option<WheelInput> {
+    scan_handbrake_input(Path::new("/sys/class/input"))
+}
+
+/// Whether `name` looks like a Logitech Racing Adapter (`046d:c273`).
+pub fn is_racing_adapter_name(name: &str) -> bool {
+    let upper = name.to_uppercase();
+    upper.contains("RACING ADAPTER")
+}
+
+/// Scan `sysfs_input` for `event*` entries matching [`is_racing_adapter_name`].
+pub fn scan_racing_adapter_input(sysfs_input: &Path) -> Option<WheelInput> {
+    scan_input_by_name(sysfs_input, is_racing_adapter_name)
+}
+
+/// Find a standalone Logitech Racing Adapter's evdev node, or `None` if not connected via USB.
+pub fn discover_racing_adapter_input() -> Option<WheelInput> {
+    scan_racing_adapter_input(Path::new("/sys/class/input"))
+}
+
 /// Evdev button codes and labels for the Logitech RS H-Shifter when attached
 /// to a direct-drive base (sub-device 03, hardware-verified 2026-10-29).
 pub const RS_SHIFTER_WHEEL_BUTTONS: &[(u16, &str)] = &[
@@ -721,6 +753,21 @@ pub fn gear_from_standalone_code(code: u16) -> Option<u8> {
         0x125 | 0x2c5 => Some(6),
         0x126 | 0x2c6 => Some(7),
         0x127 | 0x2c7 => Some(8), // Reverse (R)
+        _ => None,
+    }
+}
+
+/// Decode a gear index (1..=6, 8 for Reverse) from a Driving Force Shifter
+/// connected via the Logitech Racing Adapter (`046d:c273`).
+pub fn gear_from_adapter_code(code: u16) -> Option<u8> {
+    match code {
+        0x120 => Some(1),
+        0x121 => Some(2),
+        0x122 => Some(3),
+        0x123 => Some(4),
+        0x124 => Some(5),
+        0x125 => Some(6),
+        0x126 => Some(8), // Reverse (R)
         _ => None,
     }
 }
@@ -1128,6 +1175,34 @@ mod shifter_tests {
         assert!(is_shifter_name("Generic H-Shifter"));
         assert!(!is_shifter_name("Logitech RS50 Base"));
         assert!(!is_shifter_name("G923 Racing Wheel"));
+    }
+
+    #[test]
+    fn handbrake_name_matching() {
+        assert!(is_handbrake_name("Logitech RS Shifter & Handbrake"));
+        assert!(is_handbrake_name("Generic Handbrake USB"));
+        assert!(!is_handbrake_name("Logitech RS50 Base"));
+        assert!(!is_handbrake_name("Logitech RS H-Shifter"));
+    }
+
+    #[test]
+    fn racing_adapter_name_matching() {
+        assert!(is_racing_adapter_name("Logitech Racing Adapter"));
+        assert!(is_racing_adapter_name("Racing Adapter USB"));
+        assert!(!is_racing_adapter_name("Logitech RS50 Base"));
+        assert!(!is_racing_adapter_name("Logitech RS H-Shifter"));
+    }
+
+    #[test]
+    fn racing_adapter_gear_decoding() {
+        assert_eq!(gear_from_adapter_code(0x120), Some(1));
+        assert_eq!(gear_from_adapter_code(0x121), Some(2));
+        assert_eq!(gear_from_adapter_code(0x122), Some(3));
+        assert_eq!(gear_from_adapter_code(0x123), Some(4));
+        assert_eq!(gear_from_adapter_code(0x124), Some(5));
+        assert_eq!(gear_from_adapter_code(0x125), Some(6));
+        assert_eq!(gear_from_adapter_code(0x126), Some(8));
+        assert_eq!(gear_from_adapter_code(0x127), None);
     }
 
     #[test]

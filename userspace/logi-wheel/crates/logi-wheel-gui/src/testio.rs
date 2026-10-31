@@ -36,6 +36,9 @@ pub struct Snapshot {
     pub gear: i32,
     pub shifter_connected: bool,
     pub shifter_mode: String,
+    pub seq_shift_up: bool,
+    pub seq_shift_down: bool,
+    pub adapter_connected: bool,
 }
 
 /// How often the reader pushes a fresh [`Snapshot`] at most.
@@ -81,7 +84,32 @@ impl Reader {
                 None
             }
         });
+        let mut standalone_handbrake = evtest::discover_handbrake_input().and_then(|s| {
+            if s.event_path != path {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                    .open(&s.event_path)
+                    .ok()
+            } else {
+                None
+            }
+        });
+        let mut standalone_adapter = evtest::discover_racing_adapter_input().and_then(|s| {
+            if s.event_path != path {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                    .open(&s.event_path)
+                    .ok()
+            } else {
+                None
+            }
+        });
         let standalone_detected = standalone_shifter.is_some();
+        let adapter_detected = standalone_adapter.is_some();
+        let right_paddle_idx = codes.iter().position(|c| *c == 0x124);
+        let left_paddle_idx = codes.iter().position(|c| *c == 0x125);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let handle = std::thread::spawn(move || {
@@ -91,8 +119,15 @@ impl Reader {
                 // until the first real event arrives.
                 steering_raw: evtest::AXIS_MAX / 2,
                 buttons: vec![false; codes.len()],
-                shifter_connected: standalone_detected,
-                shifter_mode: if standalone_detected { "Direct USB".to_string() } else { String::new() },
+                shifter_connected: standalone_detected || adapter_detected,
+                shifter_mode: if standalone_detected {
+                    "Direct USB (RS H-Shifter)".to_string()
+                } else if adapter_detected {
+                    "Logitech Racing Adapter".to_string()
+                } else {
+                    String::new()
+                },
+                adapter_connected: adapter_detected,
                 ..Snapshot::default()
             };
             let mut buf = [0u8; EVENT_SIZE * 64];
@@ -113,12 +148,104 @@ impl Reader {
                                         if pressed {
                                             snapshot.gear = gear as i32;
                                             snapshot.shifter_connected = true;
-                                            snapshot.shifter_mode = "Direct USB".to_string();
+                                            snapshot.shifter_mode = "Direct USB (RS H-Shifter)".to_string();
                                             dirty = true;
                                         } else if snapshot.gear == gear as i32 {
                                             snapshot.gear = 0;
                                             dirty = true;
                                         }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(ref mut hb_file) = standalone_handbrake {
+                    let mut hb_buf = [0u8; EVENT_SIZE * 32];
+                    match hb_file.read(&mut hb_buf) {
+                        Ok(n) if n > 0 => {
+                            let (events, _partial) = hb_buf[..n].as_chunks::<EVENT_SIZE>();
+                            for chunk in events {
+                                if let Some(event) = evtest::parse_event(chunk) {
+                                    match event {
+                                        TestEvent::Axis { code: evtest::ABS_Z, value } => {
+                                            // Scale 10-bit analog handbrake (0..1023) to wheel pedal scale (0..65535)
+                                            snapshot.axes[3] = ((value as i64 * 65535) / 1023) as i32;
+                                            dirty = true;
+                                        }
+                                        TestEvent::Button { code, pressed } => {
+                                            match code {
+                                                0x120 => { // BTN_TRIGGER / 288 (Shift Up)
+                                                    snapshot.seq_shift_up = pressed;
+                                                    if let Some(idx) = right_paddle_idx {
+                                                        if idx < snapshot.buttons.len() {
+                                                            snapshot.buttons[idx] = pressed;
+                                                        }
+                                                    }
+                                                    dirty = true;
+                                                }
+                                                0x121 => { // BTN_THUMB / 289 (Shift Down)
+                                                    snapshot.seq_shift_down = pressed;
+                                                    if let Some(idx) = left_paddle_idx {
+                                                        if idx < snapshot.buttons.len() {
+                                                            snapshot.buttons[idx] = pressed;
+                                                        }
+                                                    }
+                                                    dirty = true;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(ref mut ad_file) = standalone_adapter {
+                    let mut ad_buf = [0u8; EVENT_SIZE * 32];
+                    match ad_file.read(&mut ad_buf) {
+                        Ok(n) if n > 0 => {
+                            let (events, _partial) = ad_buf[..n].as_chunks::<EVENT_SIZE>();
+                            for chunk in events {
+                                if let Some(event) = evtest::parse_event(chunk) {
+                                    match event {
+                                        TestEvent::Axis { code, value } => {
+                                            // Scale 12-bit pedal axes (0..4095) to wheel pedal scale (0..65535)
+                                            let scaled = ((value as i64 * 65535) / 4095) as i32;
+                                            match code {
+                                                evtest::ABS_Y => {
+                                                    snapshot.axes[0] = scaled; // Throttle
+                                                    dirty = true;
+                                                }
+                                                evtest::ABS_Z => {
+                                                    snapshot.axes[1] = scaled; // Brake
+                                                    dirty = true;
+                                                }
+                                                evtest::ABS_RX => {
+                                                    snapshot.axes[2] = scaled; // Clutch
+                                                    dirty = true;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                        TestEvent::Button { code, pressed } => {
+                                            if let Some(gear) = evtest::gear_from_adapter_code(code) {
+                                                if pressed {
+                                                    snapshot.gear = gear as i32;
+                                                    snapshot.shifter_connected = true;
+                                                    snapshot.shifter_mode = "Racing Adapter (Driving Force)".to_string();
+                                                    dirty = true;
+                                                } else if snapshot.gear == gear as i32 {
+                                                    snapshot.gear = 0;
+                                                    dirty = true;
+                                                }
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
@@ -199,13 +326,18 @@ fn apply_event(
                 snapshot.buttons[i] = pressed;
                 changed = true;
             }
+            if code == 0x124 {
+                snapshot.seq_shift_up = pressed;
+                changed = true;
+            } else if code == 0x125 {
+                snapshot.seq_shift_down = pressed;
+                changed = true;
+            }
             if let Some(gear) = evtest::gear_from_wheel_code(code) {
                 if pressed {
                     snapshot.gear = gear as i32;
                     snapshot.shifter_connected = true;
-                    if snapshot.shifter_mode.is_empty() {
-                        snapshot.shifter_mode = "RS50 Base".to_string();
-                    }
+                    snapshot.shifter_mode = "Base / Adapter".to_string();
                     changed = true;
                 } else if snapshot.gear == gear as i32 {
                     snapshot.gear = 0;
