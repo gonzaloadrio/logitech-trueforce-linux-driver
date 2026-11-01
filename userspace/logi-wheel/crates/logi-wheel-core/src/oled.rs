@@ -143,11 +143,14 @@ pub const SAMPLES: &[(&str, &str)] = &[
     ("{rpm_pct}", "191"),
     ("{throttle_pct}", "128"),
     ("{brake_pct}", "255"),
+    ("{delta}", "-0.24"),
+    ("{lap_time}", "1:42.35"),
+    ("{lap}", "14"),
 ];
 
 /// One line the apps show next to the fields.
 pub const PLACEHOLDER_HINT: &str =
-    "Type {gear}, {speed}, {speed_mph}, {rpm}, {rpm_pct}, {throttle_pct} or {brake_pct} in a field to fill it from the game.";
+    "Type {gear}, {speed}, {speed_mph}, {delta}, {lap_time}, {lap}, {rpm}, {rpm_pct}, {throttle_pct} or {brake_pct} in a field to fill it from the game.";
 
 /// The values with every placeholder replaced by its sample, which is what
 /// the preview draws and what "show now" sends for a live design: the panel
@@ -321,6 +324,7 @@ pub const PRESETS: &[Preset] = &[
     Preset { name: "Rev bar", what: "A bar that fills with engine revs, like a shift light", layout: 'C', values: &["{rpm_pct}"] },
     Preset { name: "Revs, gear and speed", what: "The rev bar with the gear on the right and the speed on the left", layout: 'E', values: &["{rpm_pct}", "0", "{gear}", "{speed}kmh"] },
     Preset { name: "Race board", what: "Gear, speed and revs on four rows", layout: 'J', values: &["GEAR   SPEED", "{gear}  {speed}", "REVS", "{rpm}"] },
+    Preset { name: "Pace and delta", what: "Gear, speed, lap time and delta live from the game", layout: 'J', values: &["G:{gear}   {speed}KM/H", "{lap_time}", "LAP {lap}  DELTA", "{delta}"] },
     // The leading space on the lower row skips the panel's left zone, so
     // the pair draws right-aligned rather than as "1" and "28/255".
     Preset { name: "Pedals", what: "Throttle and brake, 0 to 255, for checking a pedal set", layout: 'H', values: &["THROTTLE   BRAKE", " {throttle_pct}/{brake_pct}"] },

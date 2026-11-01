@@ -107,6 +107,30 @@ fn gear_text(gear: i8) -> String {
     }
 }
 
+fn delta_text(delta: Option<f32>) -> String {
+    match delta {
+        Some(d) if d.is_finite() => {
+            if d >= 0.0 {
+                format!("+{:.2}", d)
+            } else {
+                format!("{:.2}", d)
+            }
+        }
+        _ => "--.--".to_string(),
+    }
+}
+
+fn lap_time_text(lap_time: Option<f32>) -> String {
+    match lap_time {
+        Some(t) if t >= 0.0 && t.is_finite() => {
+            let minutes = (t / 60.0) as u32;
+            let seconds = t % 60.0;
+            format!("{minutes}:{seconds:05.2}")
+        }
+        _ => "--:--.--".to_string(),
+    }
+}
+
 fn pct255(v: f32) -> u32 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u32
 }
@@ -133,6 +157,9 @@ pub fn render(template: &str, tel: &Telemetry) -> String {
             "rpm_pct" => Some(pct255(rpm_frac).to_string()),
             "throttle_pct" => Some(pct255(tel.throttle).to_string()),
             "brake_pct" => Some(pct255(tel.brake).to_string()),
+            "delta" => Some(delta_text(tel.delta)),
+            "lap_time" => Some(lap_time_text(tel.lap_time)),
+            "lap" => Some(if tel.lap > 0 { tel.lap.to_string() } else { "-".to_string() }),
             _ => None,
         };
         match value {
@@ -175,6 +202,25 @@ mod tests {
         assert_eq!(render("{nope} {gear", &t), "{nope} {gear");
         assert_eq!(render("R: {gear}", &Telemetry { gear: -1, ..t }), "R: R");
         assert_eq!(render("N: {gear}", &Telemetry { gear: 0, ..t }), "N: N");
+        assert_eq!(
+            render("{delta} {lap_time} {lap}", &Telemetry {
+                delta: Some(-0.24),
+                lap_time: Some(102.35),
+                lap: 14,
+                ..t
+            }),
+            "-0.24 1:42.35 14"
+        );
+        assert_eq!(
+            render("{delta} {lap_time} {lap}", &Telemetry {
+                delta: Some(0.15),
+                lap_time: Some(15.4),
+                lap: 1,
+                ..t
+            }),
+            "+0.15 0:15.40 1"
+        );
+        assert_eq!(render("{delta} {lap_time} {lap}", &t), "--.-- --:--.-- -");
     }
 
     #[test]

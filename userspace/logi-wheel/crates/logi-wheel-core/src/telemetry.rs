@@ -58,4 +58,15 @@ pub struct Telemetry {
     pub impact_g: f32,
     /// DRS (or any push-to-pass equivalent) is open.
     pub drs_active: bool,
+
+    // ---------------------------------------------------------------
+    // Timing and pace metrics for the base's screen (OLED).
+    // ---------------------------------------------------------------
+    /// Live lap delta in seconds relative to the reference/best lap.
+    /// Negative means faster (green/gaining), positive means slower.
+    pub delta: Option<f32>,
+    /// Current lap time in seconds.
+    pub lap_time: Option<f32>,
+    /// Current lap number (1-based, 0 when unavailable).
+    pub lap: u32,
 }

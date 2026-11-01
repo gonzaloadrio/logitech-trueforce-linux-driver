@@ -36,6 +36,8 @@ pub struct Game {
     /// KiB. Reading one with the other's length is what left `SCORING_LEN`
     /// declared and unused, which only the Windows build ever noticed.
     pub aux_section: Option<(&'static str, usize)>,
+    /// An optional graphics/timing section (e.g. Assetto Corsa's `Local\acpmf_graphic`).
+    pub graphic_section: Option<(&'static str, usize)>,
     /// Extra prerequisite the user must have installed, if any.
     pub prerequisite: Option<&'static str>,
     /// Whether a decoder exists, or `--dump` is all this game can do yet.
@@ -65,6 +67,7 @@ pub const GAMES: &[Game] = &[
         name: "iRacing",
         section: "Local\\IRSDKMemMapFileName",
         aux_section: None,
+        graphic_section: None,
         prerequisite: None,
         decodable: true,
         read_len: DEFAULT_READ_LEN,
@@ -74,6 +77,7 @@ pub const GAMES: &[Game] = &[
         name: "RaceRoom Racing Experience",
         section: crate::raceroom::SECTION,
         aux_section: None,
+        graphic_section: None,
         prerequisite: None,
         decodable: true,
         read_len: DEFAULT_READ_LEN,
@@ -83,6 +87,7 @@ pub const GAMES: &[Game] = &[
         name: "Assetto Corsa",
         section: crate::assettocorsa::SECTION_PHYSICS,
         aux_section: Some((crate::assettocorsa::SECTION_STATIC, DEFAULT_READ_LEN)),
+        graphic_section: Some((crate::assettocorsa::SECTION_GRAPHIC, crate::assettocorsa::GRAPHIC_LEN)),
         prerequisite: None,
         decodable: true,
         read_len: DEFAULT_READ_LEN,
@@ -94,6 +99,7 @@ pub const GAMES: &[Game] = &[
         // the same decoder reads it; only the settings id differs.
         section: crate::assettocorsa::SECTION_PHYSICS,
         aux_section: Some((crate::assettocorsa::SECTION_STATIC, DEFAULT_READ_LEN)),
+        graphic_section: Some((crate::assettocorsa::SECTION_GRAPHIC, crate::assettocorsa::GRAPHIC_LEN)),
         prerequisite: None,
         decodable: true,
         read_len: DEFAULT_READ_LEN,
@@ -105,6 +111,7 @@ pub const GAMES: &[Game] = &[
         // block, so unlike Competizione it needs only one section.
         section: crate::assettocorsa::SECTION_PHYSICS_EVO,
         aux_section: None,
+        graphic_section: None,
         prerequisite: None,
         decodable: true,
         read_len: DEFAULT_READ_LEN,
@@ -114,6 +121,7 @@ pub const GAMES: &[Game] = &[
         name: "Le Mans Ultimate",
         section: crate::rfactor2::SECTION_TELEMETRY,
         aux_section: Some((crate::rfactor2::SECTION_SCORING, crate::rfactor2::SCORING_LEN)),
+        graphic_section: None,
         prerequisite: Some(RF2_PLUGIN),
         decodable: true,
         read_len: crate::rfactor2::TELEMETRY_LEN,
@@ -123,6 +131,7 @@ pub const GAMES: &[Game] = &[
         name: "rFactor 2",
         section: crate::rfactor2::SECTION_TELEMETRY,
         aux_section: Some((crate::rfactor2::SECTION_SCORING, crate::rfactor2::SCORING_LEN)),
+        graphic_section: None,
         prerequisite: Some(RF2_PLUGIN),
         decodable: true,
         read_len: crate::rfactor2::TELEMETRY_LEN,
