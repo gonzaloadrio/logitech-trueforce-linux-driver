@@ -144,7 +144,7 @@ pub fn decode(buf: &[u8]) -> Option<RelayTelemetry> {
         _ => 0,
     };
 
-    Some(RelayTelemetry { game_id: ID, rpm, max_rpm, throttle, gear, speed, brake: 0.0, airborne: false })
+    Some(RelayTelemetry { game_id: ID, rpm, max_rpm, throttle, gear, speed, brake: 0.0, airborne: false, ..Default::default() })
 }
 
 #[cfg(test)]

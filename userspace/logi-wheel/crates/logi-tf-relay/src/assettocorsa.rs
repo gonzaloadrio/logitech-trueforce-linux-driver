@@ -97,6 +97,12 @@ pub const SECTION_PHYSICS: &str = "Local\\acpmf_physics";
 /// Windows named section carrying the per-session static block.
 pub const SECTION_STATIC: &str = "Local\\acpmf_static";
 
+/// Windows named section carrying the per-graphics/timing block.
+pub const SECTION_GRAPHIC: &str = "Local\\acpmf_graphic";
+
+/// Size to read from the graphic block.
+pub const GRAPHIC_LEN: usize = 1024;
+
 /// Assetto Corsa EVO's physics section. EVO renamed every block, so it does
 /// not collide with the two older games and can be told apart from them.
 pub const SECTION_PHYSICS_EVO: &str = "Local\\acevo_pmf_physics";
@@ -146,6 +152,13 @@ const OFF_MAX_RPM: usize = 412;
 /// Through `maxRpm`.
 const MIN_STATIC_LEN: usize = OFF_MAX_RPM + 4;
 
+/// Graphic block offsets (`SPageFileGraphic`).
+const OFF_GRAPHIC_SPLIT: usize = 102;
+const OFF_GRAPHIC_COMPLETED_LAPS: usize = 132;
+const OFF_GRAPHIC_I_CURRENT_TIME: usize = 140;
+const OFF_GRAPHIC_I_DELTA_LAP_TIME: usize = 152;
+const OFF_GRAPHIC_IS_DELTA_POSITIVE: usize = 156;
+
 /// Above this, the buffer is not engine data however plausible it looked.
 const MAX_PLAUSIBLE_RPM: f32 = 30_000.0;
 
@@ -155,6 +168,63 @@ fn i32_at(buf: &[u8], off: usize) -> Option<i32> {
 
 fn f32_at(buf: &[u8], off: usize) -> Option<f32> {
     Some(f32::from_le_bytes(buf.get(off..off + 4)?.try_into().ok()?))
+}
+
+fn utf16_string_at(buf: &[u8], off: usize, max_chars: usize) -> Option<String> {
+    let slice = buf.get(off..off + max_chars * 2)?;
+    let mut u16s = Vec::with_capacity(max_chars);
+    for chunk in slice.chunks_exact(2) {
+        let val = u16::from_le_bytes(chunk.try_into().ok()?);
+        if val == 0 {
+            break;
+        }
+        u16s.push(val);
+    }
+    String::from_utf16(&u16s).ok()
+}
+
+/// Decode optional timing, delta and lap count from the graphic block.
+pub fn graphic_timing_fields(graphic: &[u8]) -> (Option<f32>, Option<f32>, u32) {
+    if graphic.len() < OFF_GRAPHIC_COMPLETED_LAPS + 4 {
+        return (None, None, 0);
+    }
+    let completed_laps = i32_at(graphic, OFF_GRAPHIC_COMPLETED_LAPS).unwrap_or(-1);
+    let lap = if completed_laps >= 0 {
+        (completed_laps + 1) as u32
+    } else {
+        0
+    };
+
+    let lap_time = if graphic.len() >= OFF_GRAPHIC_I_CURRENT_TIME + 4 {
+        i32_at(graphic, OFF_GRAPHIC_I_CURRENT_TIME)
+            .filter(|&ms| ms > 0)
+            .map(|ms| ms as f32 / 1000.0)
+    } else {
+        None
+    };
+
+    let delta = if graphic.len() >= OFF_GRAPHIC_IS_DELTA_POSITIVE + 4 {
+        let delta_ms = i32_at(graphic, OFF_GRAPHIC_I_DELTA_LAP_TIME).unwrap_or(0);
+        let is_pos = i32_at(graphic, OFF_GRAPHIC_IS_DELTA_POSITIVE).unwrap_or(0);
+        if delta_ms != 0 && delta_ms.abs() < 600_000 {
+            let s = delta_ms.abs() as f32 / 1000.0;
+            if is_pos == 1 {
+                Some(s)
+            } else {
+                Some(-s)
+            }
+        } else {
+            utf16_string_at(graphic, OFF_GRAPHIC_SPLIT, 15)
+                .and_then(|s| s.trim().parse::<f32>().ok())
+        }
+    } else if graphic.len() >= OFF_GRAPHIC_SPLIT + 30 {
+        utf16_string_at(graphic, OFF_GRAPHIC_SPLIT, 15)
+            .and_then(|s| s.trim().parse::<f32>().ok())
+    } else {
+        None
+    };
+
+    (delta, lap_time, lap)
 }
 
 /// Confirm the static block really begins with a UTF-16 `smVersion` string,
@@ -183,6 +253,7 @@ fn static_layout_looks_right(buf: &[u8]) -> bool {
 pub fn decode(
     physics: &[u8],
     statics: &[u8],
+    graphic: Option<&[u8]>,
     game_id: &'static str,
     gate: &mut AirborneGate,
 ) -> Option<RelayTelemetry> {
@@ -204,6 +275,10 @@ pub fn decode(
 
     let (throttle, gear) = head_inputs(physics)?;
     let (speed, brake) = head_screen_fields(physics);
+    let (delta, lap_time, lap) = match graphic {
+        Some(g) => graphic_timing_fields(g),
+        None => (None, None, 0),
+    };
     Some(RelayTelemetry {
         game_id,
         rpm,
@@ -213,6 +288,9 @@ pub fn decode(
         speed,
         brake,
         airborne: gate.airborne(physics),
+        delta,
+        lap_time,
+        lap,
     })
 }
 
@@ -348,12 +426,21 @@ pub fn decode_evo(physics: &[u8]) -> Option<RelayTelemetry> {
     }
     let (throttle, gear) = head_inputs(physics)?;
     let (speed, brake) = head_screen_fields(physics);
-    Some(RelayTelemetry { game_id: ID_EVO, rpm, max_rpm, throttle, gear, speed, brake, airborne: false })
+    Some(RelayTelemetry { game_id: ID_EVO, rpm, max_rpm, throttle, gear, speed, brake, airborne: false, ..Default::default() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode(
+        p: &[u8],
+        s: &[u8],
+        id: &'static str,
+        gate: &mut AirborneGate,
+    ) -> Option<RelayTelemetry> {
+        super::decode(p, s, None, id, gate)
+    }
 
     fn physics(gas: f32, gear: i32, rpms: i32) -> Vec<u8> {
         let mut b = vec![0u8; MIN_PHYSICS_LEN];
@@ -553,6 +640,38 @@ mod tests {
         assert_eq!(decode(&physics(f32::NAN, 3, 6000), &statics(7500), ID, &mut AirborneGate::default()).unwrap().throttle, 0.0);
         assert_eq!(decode(&physics(5.0, 3, 6000), &statics(7500), ID, &mut AirborneGate::default()).unwrap().throttle, 1.0);
         assert_eq!(decode(&physics(-5.0, 3, 6000), &statics(7500), ID, &mut AirborneGate::default()).unwrap().throttle, 0.0);
+    }
+
+    #[test]
+    fn graphic_timing_fields_extract_lap_time_and_delta() {
+        let mut g = vec![0u8; 180];
+        // completedLaps = 13 -> lap 14
+        g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&13i32.to_le_bytes());
+        // iCurrentTime = 102350 ms -> 102.35 s
+        g[OFF_GRAPHIC_I_CURRENT_TIME..][..4].copy_from_slice(&102350i32.to_le_bytes());
+        // iDeltaLapTime = 240 ms, isDeltaPositive = 0 -> -0.24 s
+        g[OFF_GRAPHIC_I_DELTA_LAP_TIME..][..4].copy_from_slice(&240i32.to_le_bytes());
+        g[OFF_GRAPHIC_IS_DELTA_POSITIVE..][..4].copy_from_slice(&0i32.to_le_bytes());
+
+        let (delta, lap_time, lap) = graphic_timing_fields(&g);
+        assert_eq!(lap, 14);
+        assert!((lap_time.unwrap() - 102.35).abs() < 1e-3);
+        assert!((delta.unwrap() - (-0.24)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn graphic_timing_fields_positive_delta() {
+        let mut g = vec![0u8; 180];
+        g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&0i32.to_le_bytes()); // Lap 1
+        g[OFF_GRAPHIC_I_CURRENT_TIME..][..4].copy_from_slice(&15400i32.to_le_bytes()); // 15.4 s
+        // iDeltaLapTime = 150 ms, isDeltaPositive = 1 -> +0.15 s
+        g[OFF_GRAPHIC_I_DELTA_LAP_TIME..][..4].copy_from_slice(&150i32.to_le_bytes());
+        g[OFF_GRAPHIC_IS_DELTA_POSITIVE..][..4].copy_from_slice(&1i32.to_le_bytes());
+
+        let (delta, lap_time, lap) = graphic_timing_fields(&g);
+        assert_eq!(lap, 1);
+        assert!((lap_time.unwrap() - 15.4).abs() < 1e-3);
+        assert!((delta.unwrap() - 0.15).abs() < 1e-3);
     }
 }
 

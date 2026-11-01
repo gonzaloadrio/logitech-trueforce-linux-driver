@@ -58,6 +58,8 @@ struct Args {
     /// Assetto Corsa's redline and the rF2 family's "which car is the
     /// player" both live outside the section carrying engine speed.
     aux: Option<(String, usize)>,
+    /// The optional graphics/timing section (Assetto Corsa / ACC).
+    graphic: Option<(String, usize)>,
     dump: Option<String>,
     /// Which known game was named, when one was. `--section` alone leaves
     /// this `None`: an arbitrary section can be dumped but not decoded,
@@ -68,6 +70,7 @@ struct Args {
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut section = None;
     let mut aux = None;
+    let mut graphic = None;
     let mut dump = None;
     let mut game_id = None;
     let mut it = argv.iter();
@@ -86,6 +89,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 }
                 section = Some(game.section.to_string());
                 aux = game.aux_section.map(|(name, len)| (name.to_string(), len));
+                graphic = game.graphic_section.map(|(name, len)| (name.to_string(), len));
                 game_id = Some(game.id);
             }
             "--section" => {
@@ -93,6 +97,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 // An explicitly named section is dumped, never decoded, so
                 // whatever a preceding --game set up no longer applies.
                 aux = None;
+                graphic = None;
                 game_id = None;
             }
             "--dump" => {
@@ -102,7 +107,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
-    Ok(Args { section, aux, dump, game: game_id })
+    Ok(Args { section, aux, graphic, dump, game: game_id })
 }
 
 fn main() -> ExitCode {
@@ -132,7 +137,13 @@ fn main() -> ExitCode {
                 .game
                 .and_then(games::by_id)
                 .map_or(games::DEFAULT_READ_LEN, |g| g.read_len);
-            run_stream(&section, args.aux.as_ref(), args.game.unwrap_or(""), read_len)
+            run_stream(
+                &section,
+                args.aux.as_ref(),
+                args.graphic.as_ref(),
+                args.game.unwrap_or(""),
+                read_len,
+            )
         }
         None => {
             // Reached by --section with no --game: a section can always be
@@ -158,6 +169,7 @@ fn main() -> ExitCode {
 fn run_stream(
     section: &str,
     aux: Option<&(String, usize)>,
+    graphic: Option<&(String, usize)>,
     game: &str,
     read_len: usize,
 ) -> ExitCode {
@@ -195,13 +207,25 @@ fn run_stream(
                     Some((name, len)) => win::read_section(name, *len).ok(),
                     None => None,
                 };
+                let graphic_bytes = match graphic {
+                    Some((name, len)) => win::read_section(name, *len).ok(),
+                    None => None,
+                };
                 let sample = match game {
                     raceroom::ID => raceroom::decode(&bytes),
                     assettocorsa::ID_EVO => assettocorsa::decode_evo(&bytes),
                     id @ (assettocorsa::ID | assettocorsa::ID_ACC) => {
                         let id =
                             if id == assettocorsa::ID_ACC { assettocorsa::ID_ACC } else { assettocorsa::ID };
-                        aux_bytes.and_then(|s| assettocorsa::decode(&bytes, &s, id, &mut airborne_gate))
+                        aux_bytes.and_then(|s| {
+                            assettocorsa::decode(
+                                &bytes,
+                                &s,
+                                graphic_bytes.as_deref(),
+                                id,
+                                &mut airborne_gate,
+                            )
+                        })
                     }
                     id @ (rfactor2::ID_RF2 | rfactor2::ID_LMU) => {
                         // The two share a decoder but not a settings
@@ -237,6 +261,7 @@ fn run_stream(
 fn run_stream(
     _section: &str,
     _aux: Option<&(String, usize)>,
+    _graphic: Option<&(String, usize)>,
     _game: &str,
     _read_len: usize,
 ) -> ExitCode {

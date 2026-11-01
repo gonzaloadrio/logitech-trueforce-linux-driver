@@ -210,7 +210,7 @@ pub fn decode(telemetry: &[u8], scoring: &[u8], game_id: &'static str) -> Option
         _ => 0,
     };
 
-    Some(RelayTelemetry { game_id, rpm: rpm as f32, max_rpm: max_rpm as f32, throttle, gear, speed, brake, airborne: false })
+    Some(RelayTelemetry { game_id, rpm: rpm as f32, max_rpm: max_rpm as f32, throttle, gear, speed, brake, airborne: false, ..Default::default() })
 }
 
 #[cfg(test)]
