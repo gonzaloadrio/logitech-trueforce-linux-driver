@@ -36,7 +36,7 @@ pub struct Game {
     /// KiB. Reading one with the other's length is what left `SCORING_LEN`
     /// declared and unused, which only the Windows build ever noticed.
     pub aux_section: Option<(&'static str, usize)>,
-    /// An optional graphics/timing section (e.g. Assetto Corsa's `Local\acpmf_graphic`).
+    /// An optional graphics/timing section (e.g. Assetto Corsa's `Local\acpmf_graphics`).
     pub graphic_section: Option<(&'static str, usize)>,
     /// Extra prerequisite the user must have installed, if any.
     pub prerequisite: Option<&'static str>,
