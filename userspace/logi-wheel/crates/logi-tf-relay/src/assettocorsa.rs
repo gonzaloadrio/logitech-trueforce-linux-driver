@@ -98,7 +98,7 @@ pub const SECTION_PHYSICS: &str = "Local\\acpmf_physics";
 pub const SECTION_STATIC: &str = "Local\\acpmf_static";
 
 /// Windows named section carrying the per-graphics/timing block.
-pub const SECTION_GRAPHIC: &str = "Local\\acpmf_graphic";
+pub const SECTION_GRAPHIC: &str = "Local\\acpmf_graphics";
 
 /// Size to read from the graphic block.
 pub const GRAPHIC_LEN: usize = 1024;
@@ -113,6 +113,7 @@ const OFF_BRAKE: usize = 8;
 const OFF_GEAR: usize = 16;
 const OFF_RPMS: usize = 20;
 const OFF_SPEED_KMH: usize = 28;
+const OFF_PERFORMANCE_METER: usize = 312;
 
 /// Through the last physics field read, `rpms`.
 const MIN_PHYSICS_LEN: usize = OFF_RPMS + 4;
@@ -153,11 +154,10 @@ const OFF_MAX_RPM: usize = 412;
 const MIN_STATIC_LEN: usize = OFF_MAX_RPM + 4;
 
 /// Graphic block offsets (`SPageFileGraphic`).
+const OFF_GRAPHIC_CURRENT_TIME: usize = 12;
 const OFF_GRAPHIC_SPLIT: usize = 102;
 const OFF_GRAPHIC_COMPLETED_LAPS: usize = 132;
 const OFF_GRAPHIC_I_CURRENT_TIME: usize = 140;
-const OFF_GRAPHIC_I_DELTA_LAP_TIME: usize = 152;
-const OFF_GRAPHIC_IS_DELTA_POSITIVE: usize = 156;
 
 /// Above this, the buffer is not engine data however plausible it looked.
 const MAX_PLAUSIBLE_RPM: f32 = 30_000.0;
@@ -183,8 +183,54 @@ fn utf16_string_at(buf: &[u8], off: usize, max_chars: usize) -> Option<String> {
     String::from_utf16(&u16s).ok()
 }
 
-/// Decode optional timing, delta and lap count from the graphic block.
-pub fn graphic_timing_fields(graphic: &[u8]) -> (Option<f32>, Option<f32>, u32) {
+fn parse_lap_time_str(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() || s.starts_with('-') {
+        return None;
+    }
+    if let Some((min_str, sec_str)) = s.split_once(':') {
+        let mins: f32 = min_str.trim().parse().ok()?;
+        let secs: f32 = sec_str.trim().parse().ok()?;
+        let total = mins * 60.0 + secs;
+        if total > 0.0 && total < 36000.0 {
+            Some(total)
+        } else {
+            None
+        }
+    } else {
+        let secs: f32 = s.parse().ok()?;
+        if secs > 0.0 && secs < 36000.0 {
+            Some(secs)
+        } else {
+            None
+        }
+    }
+}
+
+fn parse_delta_str(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (sign, rest) = if let Some(stripped) = s.strip_prefix('+') {
+        (1.0, stripped.trim())
+    } else if let Some(stripped) = s.strip_prefix('-') {
+        (-1.0, stripped.trim())
+    } else {
+        (1.0, s)
+    };
+    if let Some((min_str, sec_str)) = rest.split_once(':') {
+        let mins: f32 = min_str.trim().parse().ok()?;
+        let secs: f32 = sec_str.trim().parse().ok()?;
+        Some(sign * (mins * 60.0 + secs))
+    } else {
+        let val: f32 = rest.parse().ok()?;
+        Some(sign * val)
+    }
+}
+
+/// Decode optional timing, delta and lap count from the physics and graphic blocks.
+pub fn graphic_timing_fields(physics: &[u8], graphic: &[u8]) -> (Option<f32>, Option<f32>, u32) {
     if graphic.len() < OFF_GRAPHIC_COMPLETED_LAPS + 4 {
         return (None, None, 0);
     }
@@ -199,27 +245,29 @@ pub fn graphic_timing_fields(graphic: &[u8]) -> (Option<f32>, Option<f32>, u32) 
         i32_at(graphic, OFF_GRAPHIC_I_CURRENT_TIME)
             .filter(|&ms| ms > 0)
             .map(|ms| ms as f32 / 1000.0)
+            .or_else(|| {
+                utf16_string_at(graphic, OFF_GRAPHIC_CURRENT_TIME, 15)
+                    .and_then(|s| parse_lap_time_str(&s))
+            })
+    } else if graphic.len() >= OFF_GRAPHIC_CURRENT_TIME + 30 {
+        utf16_string_at(graphic, OFF_GRAPHIC_CURRENT_TIME, 15)
+            .and_then(|s| parse_lap_time_str(&s))
     } else {
         None
     };
 
-    let delta = if graphic.len() >= OFF_GRAPHIC_IS_DELTA_POSITIVE + 4 {
-        let delta_ms = i32_at(graphic, OFF_GRAPHIC_I_DELTA_LAP_TIME).unwrap_or(0);
-        let is_pos = i32_at(graphic, OFF_GRAPHIC_IS_DELTA_POSITIVE).unwrap_or(0);
-        if delta_ms != 0 && delta_ms.abs() < 600_000 {
-            let s = delta_ms.abs() as f32 / 1000.0;
-            if is_pos == 1 {
-                Some(s)
-            } else {
-                Some(-s)
-            }
-        } else {
+    // Delta is only valid after completing at least one lap (out-lap has no reference).
+    // In Assetto Corsa and ACC, `performanceMeter` in the physics block (offset 312)
+    // provides the real-time continuous delta (seconds ahead [-] or behind [+]).
+    let delta = if completed_laps >= 1 {
+        if physics.len() >= OFF_PERFORMANCE_METER + 4 {
+            f32_at(physics, OFF_PERFORMANCE_METER).filter(|v| v.is_finite())
+        } else if graphic.len() >= OFF_GRAPHIC_SPLIT + 30 {
             utf16_string_at(graphic, OFF_GRAPHIC_SPLIT, 15)
-                .and_then(|s| s.trim().parse::<f32>().ok())
+                .and_then(|s| parse_delta_str(&s))
+        } else {
+            None
         }
-    } else if graphic.len() >= OFF_GRAPHIC_SPLIT + 30 {
-        utf16_string_at(graphic, OFF_GRAPHIC_SPLIT, 15)
-            .and_then(|s| s.trim().parse::<f32>().ok())
     } else {
         None
     };
@@ -276,7 +324,7 @@ pub fn decode(
     let (throttle, gear) = head_inputs(physics)?;
     let (speed, brake) = head_screen_fields(physics);
     let (delta, lap_time, lap) = match graphic {
-        Some(g) => graphic_timing_fields(g),
+        Some(g) => graphic_timing_fields(physics, g),
         None => (None, None, 0),
     };
     Some(RelayTelemetry {
@@ -642,34 +690,54 @@ mod tests {
         assert_eq!(decode(&physics(-5.0, 3, 6000), &statics(7500), ID, &mut AirborneGate::default()).unwrap().throttle, 0.0);
     }
 
+    fn write_utf16(buf: &mut [u8], off: usize, s: &str) {
+        for (i, c) in s.encode_utf16().enumerate() {
+            buf[off + i * 2..off + i * 2 + 2].copy_from_slice(&c.to_le_bytes());
+        }
+    }
+
     #[test]
     fn graphic_timing_fields_extract_lap_time_and_delta() {
+        let mut p = vec![0u8; 320];
+        p[OFF_PERFORMANCE_METER..][..4].copy_from_slice(&(-0.24f32).to_le_bytes());
         let mut g = vec![0u8; 180];
         // completedLaps = 13 -> lap 14
         g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&13i32.to_le_bytes());
         // iCurrentTime = 102350 ms -> 102.35 s
         g[OFF_GRAPHIC_I_CURRENT_TIME..][..4].copy_from_slice(&102350i32.to_le_bytes());
-        // iDeltaLapTime = 240 ms, isDeltaPositive = 0 -> -0.24 s
-        g[OFF_GRAPHIC_I_DELTA_LAP_TIME..][..4].copy_from_slice(&240i32.to_le_bytes());
-        g[OFF_GRAPHIC_IS_DELTA_POSITIVE..][..4].copy_from_slice(&0i32.to_le_bytes());
 
-        let (delta, lap_time, lap) = graphic_timing_fields(&g);
+        let (delta, lap_time, lap) = graphic_timing_fields(&p, &g);
         assert_eq!(lap, 14);
         assert!((lap_time.unwrap() - 102.35).abs() < 1e-3);
         assert!((delta.unwrap() - (-0.24)).abs() < 1e-3);
     }
 
     #[test]
-    fn graphic_timing_fields_positive_delta() {
+    fn graphic_timing_fields_lap_1_has_no_delta() {
+        let mut p = vec![0u8; 320];
+        p[OFF_PERFORMANCE_METER..][..4].copy_from_slice(&0.15f32.to_le_bytes());
         let mut g = vec![0u8; 180];
-        g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&0i32.to_le_bytes()); // Lap 1
-        g[OFF_GRAPHIC_I_CURRENT_TIME..][..4].copy_from_slice(&15400i32.to_le_bytes()); // 15.4 s
-        // iDeltaLapTime = 150 ms, isDeltaPositive = 1 -> +0.15 s
-        g[OFF_GRAPHIC_I_DELTA_LAP_TIME..][..4].copy_from_slice(&150i32.to_le_bytes());
-        g[OFF_GRAPHIC_IS_DELTA_POSITIVE..][..4].copy_from_slice(&1i32.to_le_bytes());
+        g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&0i32.to_le_bytes()); // Lap 1 (0 completed)
+        // iCurrentTime is 0, currentTime is "0:15.400"
+        write_utf16(&mut g, OFF_GRAPHIC_CURRENT_TIME, "0:15.400");
 
-        let (delta, lap_time, lap) = graphic_timing_fields(&g);
+        let (delta, lap_time, lap) = graphic_timing_fields(&p, &g);
         assert_eq!(lap, 1);
+        assert!((lap_time.unwrap() - 15.4).abs() < 1e-3);
+        assert_eq!(delta, None);
+    }
+
+    #[test]
+    fn graphic_timing_fields_positive_delta() {
+        let mut p = vec![0u8; 320];
+        p[OFF_PERFORMANCE_METER..][..4].copy_from_slice(&0.15f32.to_le_bytes());
+        let mut g = vec![0u8; 180];
+        g[OFF_GRAPHIC_COMPLETED_LAPS..][..4].copy_from_slice(&1i32.to_le_bytes()); // Lap 2 (1 completed)
+        // iCurrentTime is 0, currentTime is "0:15.400"
+        write_utf16(&mut g, OFF_GRAPHIC_CURRENT_TIME, "0:15.400");
+
+        let (delta, lap_time, lap) = graphic_timing_fields(&p, &g);
+        assert_eq!(lap, 2);
         assert!((lap_time.unwrap() - 15.4).abs() < 1e-3);
         assert!((delta.unwrap() - 0.15).abs() < 1e-3);
     }
