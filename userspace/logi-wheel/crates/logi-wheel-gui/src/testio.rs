@@ -37,6 +37,9 @@ pub struct Snapshot {
     pub gear: i32,
     pub shifter_connected: bool,
     pub shifter_mode: String,
+    pub seq_shift_up: bool,
+    pub seq_shift_down: bool,
+    pub adapter_connected: bool,
 }
 
 /// How often the reader pushes a fresh [`Snapshot`] at most.
@@ -64,6 +67,58 @@ fn open_standalone_shifter(wheel_path: &str) -> Option<std::fs::File> {
         .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
         .open(&s.event_path)
         .ok()
+}
+
+fn open_standalone_handbrake(wheel_path: &str) -> Option<std::fs::File> {
+    let s = evtest::discover_handbrake_input()?;
+    if s.event_path == wheel_path {
+        return None;
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&s.event_path)
+        .ok()
+}
+
+fn open_standalone_adapter(wheel_path: &str) -> Option<std::fs::File> {
+    let s = evtest::discover_racing_adapter_input()?;
+    if s.event_path == wheel_path {
+        return None;
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(&s.event_path)
+        .ok()
+}
+
+/// Read standalone accessories (shifter, handbrake, adapter) and fold into `snapshot`.
+fn poll_standalone_devices(
+    shifter: &mut Option<std::fs::File>,
+    handbrake: &mut Option<std::fs::File>,
+    adapter: &mut Option<std::fs::File>,
+    snapshot: &mut Snapshot,
+    right_paddle_idx: Option<usize>,
+    left_paddle_idx: Option<usize>,
+) -> bool {
+    let mut changed = false;
+    if let Some(ref mut s_file) = shifter {
+        if poll_standalone_shifter(s_file, snapshot) {
+            changed = true;
+        }
+    }
+    if let Some(ref mut hb_file) = handbrake {
+        if poll_standalone_handbrake(hb_file, snapshot, right_paddle_idx, left_paddle_idx) {
+            changed = true;
+        }
+    }
+    if let Some(ref mut ad_file) = adapter {
+        if poll_standalone_adapter(ad_file, snapshot) {
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Read and fold wheel events from `file` into `snapshot`.
@@ -114,7 +169,12 @@ impl Reader {
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
         let mut standalone_shifter = open_standalone_shifter(path);
+        let mut standalone_handbrake = open_standalone_handbrake(path);
+        let mut standalone_adapter = open_standalone_adapter(path);
         let standalone_detected = standalone_shifter.is_some();
+        let adapter_detected = standalone_adapter.is_some();
+        let right_paddle_idx = codes.iter().position(|c| *c == 0x124);
+        let left_paddle_idx = codes.iter().position(|c| *c == 0x125);
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let handle = std::thread::spawn(move || {
@@ -124,8 +184,15 @@ impl Reader {
                 // until the first real event arrives.
                 steering_raw: evtest::AXIS_MAX / 2,
                 buttons: vec![false; codes.len()],
-                shifter_connected: standalone_detected,
-                shifter_mode: if standalone_detected { "Direct USB".to_string() } else { String::new() },
+                shifter_connected: standalone_detected || adapter_detected,
+                shifter_mode: if standalone_detected {
+                    "Direct USB (RS H-Shifter)".to_string()
+                } else if adapter_detected {
+                    "Logitech Racing Adapter".to_string()
+                } else {
+                    String::new()
+                },
+                adapter_connected: adapter_detected,
                 ..Snapshot::default()
             };
             let mut buf = [0u8; EVENT_SIZE * 64];
@@ -135,10 +202,15 @@ impl Reader {
                 if thread_stop.load(Ordering::Relaxed) {
                     return;
                 }
-                if let Some(ref mut s_file) = standalone_shifter {
-                    if poll_standalone_shifter(s_file, &mut snapshot) {
-                        dirty = true;
-                    }
+                if poll_standalone_devices(
+                    &mut standalone_shifter,
+                    &mut standalone_handbrake,
+                    &mut standalone_adapter,
+                    &mut snapshot,
+                    right_paddle_idx,
+                    left_paddle_idx,
+                ) {
+                    dirty = true;
                 }
                 match poll_wheel_events(&mut file, &mut buf, &mut snapshot, &codes, axes, model) {
                     Ok(changed) => {
@@ -214,6 +286,115 @@ fn poll_standalone_shifter(s_file: &mut std::fs::File, snapshot: &mut Snapshot) 
     changed
 }
 
+/// Poll standalone RS Handbrake / Sequential Shifter events.
+fn poll_standalone_handbrake(
+    hb_file: &mut std::fs::File,
+    snapshot: &mut Snapshot,
+    right_paddle_idx: Option<usize>,
+    left_paddle_idx: Option<usize>,
+) -> bool {
+    let mut hb_buf = [0u8; EVENT_SIZE * 32];
+    let n = match hb_file.read(&mut hb_buf) {
+        Ok(n) if n > 0 => n,
+        _ => return false,
+    };
+
+    let mut changed = false;
+    let (events, _partial) = hb_buf[..n].as_chunks::<EVENT_SIZE>();
+    for chunk in events {
+        let event = match evtest::parse_event(chunk) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        match event {
+            TestEvent::Axis { code: evtest::ABS_Z, value } => {
+                // Scale 10-bit analog handbrake (0..1023) to wheel pedal scale (0..65535)
+                snapshot.axes[3] = ((value as i64 * 65535) / 1023) as i32;
+                changed = true;
+            }
+            TestEvent::Button { code: 0x120, pressed } => { // BTN_TRIGGER / 288 (Shift Up)
+                snapshot.seq_shift_up = pressed;
+                if let Some(idx) = right_paddle_idx {
+                    if idx < snapshot.buttons.len() {
+                        snapshot.buttons[idx] = pressed;
+                    }
+                }
+                changed = true;
+            }
+            TestEvent::Button { code: 0x121, pressed } => { // BTN_THUMB / 289 (Shift Down)
+                snapshot.seq_shift_down = pressed;
+                if let Some(idx) = left_paddle_idx {
+                    if idx < snapshot.buttons.len() {
+                        snapshot.buttons[idx] = pressed;
+                    }
+                }
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Poll standalone Logitech Racing Adapter events, updating pedal axes and legacy shifter gates.
+fn poll_standalone_adapter(ad_file: &mut std::fs::File, snapshot: &mut Snapshot) -> bool {
+    let mut ad_buf = [0u8; EVENT_SIZE * 32];
+    let n = match ad_file.read(&mut ad_buf) {
+        Ok(n) if n > 0 => n,
+        _ => return false,
+    };
+
+    let mut changed = false;
+    let (events, _partial) = ad_buf[..n].as_chunks::<EVENT_SIZE>();
+    for chunk in events {
+        let event = match evtest::parse_event(chunk) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        match event {
+            TestEvent::Axis { code, value } => {
+                // Scale 12-bit pedal axes (0..4095) to wheel pedal scale (0..65535)
+                let scaled = ((value as i64 * 65535) / 4095) as i32;
+                match code {
+                    evtest::ABS_Y => {
+                        snapshot.axes[0] = scaled; // Throttle
+                        changed = true;
+                    }
+                    evtest::ABS_Z => {
+                        snapshot.axes[1] = scaled; // Brake
+                        changed = true;
+                    }
+                    evtest::ABS_RX => {
+                        snapshot.axes[2] = scaled; // Clutch
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+            TestEvent::Button { code, pressed } => {
+                let gear = match evtest::gear_from_adapter_code(code) {
+                    Some(g) => g as i32,
+                    None => continue,
+                };
+
+                if pressed {
+                    snapshot.gear = gear;
+                    snapshot.shifter_connected = true;
+                    snapshot.shifter_mode = "Racing Adapter (Driving Force)".to_string();
+                    changed = true;
+                } else if snapshot.gear == gear {
+                    snapshot.gear = 0;
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
 /// Fold one raw event into `snapshot`; true if anything shown changed.
 /// `codes` is the same list `snapshot.buttons` is parallel to (see
 /// `Reader::start`).
@@ -235,12 +416,19 @@ fn apply_event(
                 snapshot.buttons[i] = pressed;
                 changed = true;
             }
+            if code == 0x124 {
+                snapshot.seq_shift_up = pressed;
+                changed = true;
+            } else if code == 0x125 {
+                snapshot.seq_shift_down = pressed;
+                changed = true;
+            }
             if let Some(gear) = evtest::gear_from_wheel_code(model, code) {
                 if pressed {
                     snapshot.gear = gear as i32;
                     snapshot.shifter_connected = true;
                     if snapshot.shifter_mode.is_empty() {
-                        snapshot.shifter_mode = "Wheel base".to_string();
+                        snapshot.shifter_mode = "Base / Adapter".to_string();
                     }
                     changed = true;
                 } else if snapshot.gear == gear as i32 {
