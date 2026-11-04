@@ -232,6 +232,9 @@ export component App inherits Window {
     in property <string> test-gear-name: "N";
     in property <bool> test-shifter-connected: false;
     in property <string> test-shifter-mode: "";
+    in property <bool> test-seq-shift-up: false;
+    in property <bool> test-seq-shift-down: false;
+    in property <bool> test-adapter-connected: false;
     in property <bool> test-sim-running: false;
     in property <string> test-sim-error: "";
     // The running (or just-finished) sequence's one-line summary (set
@@ -787,6 +790,9 @@ export component App inherits Window {
                     gear-name: root.test-gear-name;
                     shifter-connected: root.test-shifter-connected;
                     shifter-mode: root.test-shifter-mode;
+                    seq-shift-up: root.test-seq-shift-up;
+                    seq-shift-down: root.test-seq-shift-down;
+                    adapter-connected: root.test-adapter-connected;
                     sim-running: root.test-sim-running;
                     sim-error: root.test-sim-error;
                     sim-status: root.test-sim-status;

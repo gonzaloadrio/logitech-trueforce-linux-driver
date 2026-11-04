@@ -152,6 +152,9 @@ export component InfoPage inherits Rectangle {
     in property <string> gear-name: "N";
     in property <bool> shifter-connected: false;
     in property <string> shifter-mode: "";
+    in property <bool> seq-shift-up: false;
+    in property <bool> seq-shift-down: false;
+    in property <bool> adapter-connected: false;
     // The layout image's callout boxes, tinted while pressed; see
     // `TestCallout`. Only meaningful over the RS50's numbered layout photo
     // (`wheel-kind` 0): the G PRO/G923 photos are plain product shots with
@@ -711,7 +714,7 @@ export component InfoPage inherits Rectangle {
                             VerticalLayout {
                                 spacing: 2px;
                                 Text {
-                                    text: "H-Pattern Shifter (Logitech G RS H-Shifter)";
+                                    text: "Shifter & Handbrake (Logitech RS & G Series)";
                                     font-size: 15px;
                                     font-weight: 700;
                                     color: Theme.text-color;
@@ -724,29 +727,64 @@ export component InfoPage inherits Rectangle {
                                     color: root.shifter-connected ? Theme.ok-color : Theme.muted-text-color;
                                 }
                             }
-                            Rectangle {
-                                width: 145px;
-                                height: 32px;
-                                border-radius: 6px;
-                                background: root.gear == 0 
-                                    ? Palette.alternate-background 
-                                    : (root.gear == 8 ? #e0524a26 : Palette.accent-background.with-alpha(0.2));
-                                border-width: 1px;
-                                border-color: root.gear == 0 
-                                    ? Theme.panel-border 
-                                    : (root.gear == 8 ? #e0524a : Palette.accent-background);
+                            HorizontalLayout {
+                                spacing: 8px;
+                                if root.adapter-connected : Rectangle {
+                                    height: 32px;
+                                    border-radius: 6px;
+                                    background: Palette.alternate-background;
+                                    border-width: 1px;
+                                    border-color: Theme.panel-border;
 
-                                Text {
-                                    text: root.gear == 0 
-                                        ? "Neutral (N)" 
-                                        : (root.gear == 8 ? "Reverse (R)" : ("Gear " + root.gear-name));
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    color: root.gear == 0 
-                                        ? Theme.text-color 
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 6px;
+                                        alignment: center;
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Rectangle {
+                                                width: 7px;
+                                                height: 7px;
+                                                border-radius: 3.5px;
+                                                background: Theme.ok-color;
+                                            }
+                                        }
+
+                                        Text {
+                                            text: "Racing Adapter";
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                            vertical-alignment: center;
+                                            color: Theme.text-color;
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    width: 145px;
+                                    height: 32px;
+                                    border-radius: 6px;
+                                    background: root.gear == 0 
+                                        ? Palette.alternate-background 
+                                        : (root.gear == 8 ? #e0524a26 : Palette.accent-background.with-alpha(0.2));
+                                    border-width: 1px;
+                                    border-color: root.gear == 0 
+                                        ? Theme.panel-border 
                                         : (root.gear == 8 ? #e0524a : Palette.accent-background);
+
+                                    Text {
+                                        text: root.gear == 0 
+                                            ? "Neutral (N)" 
+                                            : (root.gear == 8 ? "Reverse (R)" : ("Gear " + root.gear-name));
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        color: root.gear == 0 
+                                            ? Theme.text-color 
+                                            : (root.gear == 8 ? #e0524a : Palette.accent-background);
+                                    }
                                 }
                             }
                         }
@@ -853,6 +891,60 @@ export component InfoPage inherits Rectangle {
                                         vertical-alignment: center;
                                         color: root.gear == 0 ? Palette.accent-foreground : Theme.muted-text-color;
                                     }
+                                }
+                            }
+                        }
+
+                        // RS Sequential Shifter status:
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            Rectangle {
+                                width: 140px;
+                                height: 32px;
+                                border-radius: 6px;
+                                background: root.seq-shift-up 
+                                    ? Palette.accent-background 
+                                    : Palette.alternate-background;
+                                border-width: 1px;
+                                border-color: root.seq-shift-up 
+                                    ? Palette.accent-background 
+                                    : Theme.panel-border;
+                                animate background { duration: 80ms; }
+
+                                Text {
+                                    text: "▲  Shift Up";
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    color: root.seq-shift-up 
+                                        ? Palette.accent-foreground 
+                                        : Theme.text-color;
+                                }
+                            }
+                            Rectangle {
+                                width: 140px;
+                                height: 32px;
+                                border-radius: 6px;
+                                background: root.seq-shift-down 
+                                    ? Palette.accent-background 
+                                    : Palette.alternate-background;
+                                border-width: 1px;
+                                border-color: root.seq-shift-down 
+                                    ? Palette.accent-background 
+                                    : Theme.panel-border;
+                                animate background { duration: 80ms; }
+
+                                Text {
+                                    text: "▼  Shift Down";
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    color: root.seq-shift-down 
+                                        ? Palette.accent-foreground 
+                                        : Theme.text-color;
                                 }
                             }
                         }
