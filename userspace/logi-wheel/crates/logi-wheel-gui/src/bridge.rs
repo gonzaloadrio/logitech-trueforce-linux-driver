@@ -572,6 +572,20 @@ pub fn oled_fields_model(layout: &oled::Layout, values: &[String]) -> slint::Mod
     slint::ModelRc::new(slint::VecModel::from(rows))
 }
 
+/// The autocomplete variable suggestions list for Slint.
+pub fn oled_variables_model(variables: &[&oled::VariableInfo]) -> slint::ModelRc<crate::OledVariable> {
+    let rows: Vec<crate::OledVariable> = variables
+        .iter()
+        .map(|v| crate::OledVariable {
+            key: (*v.key).into(),
+            label: (*v.label).into(),
+            sample: (*v.sample).into(),
+            desc: (*v.desc).into(),
+        })
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(rows))
+}
+
 /// The preview rows for the overlay. Two-zone rows are pre-spaced for a
 /// monospace face: first character, then the rest right-aligned in the
 /// field's width, which is how the panel places them.

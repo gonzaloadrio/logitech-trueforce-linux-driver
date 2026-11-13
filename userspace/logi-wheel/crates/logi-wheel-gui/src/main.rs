@@ -59,15 +59,13 @@ impl OledEditorState {
     }
 }
 
-/// Push the editor's models for its current state, recomposing the frame
-/// so the overlay shows what would be sent, or why it would be refused.
-fn push_oled_editor(app: &App, state: &OledEditorState) {
+/// Push the live preview and validation for the current text, without recreating
+/// the field input models (which would destroy and recreate the active LineEdit and lose focus).
+fn push_oled_preview(app: &App, state: &OledEditorState) {
     use logi_wheel_core::oled;
     let layout = state.layout();
-    app.set_oled_layout_index(state.layout as i32);
     app.set_oled_preset_index(oled::preset_index(layout, &state.values).map_or(-1, |i| i as i32));
     app.set_oled_live(oled::is_live(&state.values));
-    app.set_oled_fields(bridge::oled_fields_model(layout, &state.values));
     app.set_oled_preview(bridge::oled_preview_model(layout, &state.values));
     match oled::compose(layout, &state.values) {
         Ok(frame) => {
@@ -79,6 +77,15 @@ fn push_oled_editor(app: &App, state: &OledEditorState) {
             app.set_oled_error(e.to_string().into());
         }
     }
+}
+
+/// Push the entire editor state including layout and field models.
+/// Called when opening the overlay, picking a preset, or selecting a layout.
+fn push_oled_editor(app: &App, state: &OledEditorState) {
+    let layout = state.layout();
+    app.set_oled_layout_index(state.layout as i32);
+    app.set_oled_fields(bridge::oled_fields_model(layout, &state.values));
+    push_oled_preview(app, state);
 }
 
 struct RgbEditorState {
@@ -2294,6 +2301,8 @@ fn main() -> Result<(), slint::PlatformError> {
             };
             push_oled_editor(&app, &state);
             app.set_oled_status("".into());
+            app.set_oled_autocomplete_field_index(-1);
+            app.set_oled_autocomplete_matches(slint::ModelRc::new(slint::VecModel::default()));
             app.set_oled_editor_open(true);
             *oled_editor.lock().unwrap() = Some(state);
         });
@@ -2308,6 +2317,8 @@ fn main() -> Result<(), slint::PlatformError> {
             let i = (i.max(0) as usize).min(logi_wheel_core::oled::PRESETS.len() - 1);
             *state = OledEditorState::from_preset(i);
             app.set_oled_status("".into());
+            app.set_oled_autocomplete_field_index(-1);
+            app.set_oled_autocomplete_matches(slint::ModelRc::new(slint::VecModel::default()));
             push_oled_editor(&app, state);
         });
     }
@@ -2325,6 +2336,8 @@ fn main() -> Result<(), slint::PlatformError> {
             state.layout = i;
             state.values = vec![String::new(); state.layout().fields.len()];
             app.set_oled_status("".into());
+            app.set_oled_autocomplete_field_index(-1);
+            app.set_oled_autocomplete_matches(slint::ModelRc::new(slint::VecModel::default()));
             push_oled_editor(&app, state);
         });
     }
@@ -2339,6 +2352,34 @@ fn main() -> Result<(), slint::PlatformError> {
             if i < state.values.len() {
                 state.values[i] = text.to_string();
                 app.set_oled_status("".into());
+                // Crucial: only push the preview and validation, do NOT re-push oled_fields!
+                // Re-pushing oled_fields recreates the Slint model, causing the active LineEdit
+                // to be destroyed and recreated, which loses keyboard focus on every keystroke.
+                push_oled_preview(&app, state);
+
+                if let Some(prefix) = logi_wheel_core::oled::unclosed_brace_prefix(&text) {
+                    let matches = logi_wheel_core::oled::matching_variables(prefix);
+                    app.set_oled_autocomplete_field_index(i as i32);
+                    app.set_oled_autocomplete_matches(bridge::oled_variables_model(&matches));
+                } else {
+                    app.set_oled_autocomplete_field_index(-1);
+                    app.set_oled_autocomplete_matches(slint::ModelRc::new(slint::VecModel::default()));
+                }
+            }
+        });
+    }
+    {
+        let oled_editor = oled_editor.clone();
+        let app_weak = app.as_weak();
+        app.on_oled_select_autocomplete(move |i, key| {
+            let Some(app) = app_weak.upgrade() else { return };
+            let mut guard = oled_editor.lock().unwrap();
+            let Some(state) = guard.as_mut() else { return };
+            let i = i.max(0) as usize;
+            if i < state.values.len() {
+                state.values[i] = logi_wheel_core::oled::complete_variable(&state.values[i], &key);
+                app.set_oled_autocomplete_field_index(-1);
+                app.set_oled_autocomplete_matches(slint::ModelRc::new(slint::VecModel::default()));
                 push_oled_editor(&app, state);
             }
         });

@@ -1,4 +1,4 @@
-import { Button, ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ListView, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 // A ready-made screen, by name and by what it shows.
@@ -24,6 +24,14 @@ export struct OledRow {
     align: int,
 }
 
+// A telemetry variable for autocompletion and quick insertion.
+export struct OledVariable {
+    key: string,
+    label: string,
+    sample: string,
+    desc: string,
+}
+
 // The screen editor overlay. Left: the preview and the presets, which is
 // where most people stop. Right: the design behind the preview, open for
 // changes: the layout, its fields and the game placeholders. Rust owns the
@@ -37,6 +45,8 @@ export component OledEditor inherits Rectangle {
     in property <int> layout-index: 6;
     in property <[OledField]> fields: [];
     in property <[OledRow]> preview: [];
+    in property <[OledVariable]> autocomplete-matches: [];
+    in property <int> autocomplete-field-index: -1;
     // Whether a field is fed from the game, so the preview is sample data.
     in property <bool> live: false;
     in property <string> error: "";
@@ -47,6 +57,7 @@ export component OledEditor inherits Rectangle {
     callback set-preset(int);
     callback set-layout(int);
     callback set-field(int, string);
+    callback select-autocomplete(int, string);
     callback send();
     callback use-in-games();
     callback off();
@@ -59,14 +70,15 @@ export component OledEditor inherits Rectangle {
     }
 
     Rectangle {
-        width: min(720px, root.width - 16px);
-        height: min(600px, root.height - 16px);
+        width: min(760px, root.width - 24px);
+        height: min(620px, root.height - 24px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.panel-background;
         border-radius: Theme.panel-radius;
         border-width: 1px;
         border-color: Theme.panel-border;
+        clip: true;
 
         VerticalLayout {
             padding: 16px;
@@ -180,71 +192,148 @@ export component OledEditor inherits Rectangle {
                 }
 
                 // Right: the design, open for changes.
-                VerticalLayout {
-                    spacing: 8px;
-                    alignment: start;
+                ScrollView {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    viewport-width: self.visible-width;
+                    viewport-height: max(design-column.preferred-height, self.height);
 
-                    Text {
-                        text: root.preset-index >= 0 ? "MAKE IT YOUR OWN" : "YOUR OWN DESIGN";
-                        font-size: 11px;
-                        font-weight: 700;
-                        color: Theme.muted-text-color;
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
+                    design-column := VerticalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        padding-right: 8px;
+
                         Text {
-                            width: 96px;
-                            text: "Layout";
-                            font-size: 12px;
-                            vertical-alignment: center;
-                            color: Theme.text-color;
-                        }
-                        ComboBox {
-                            horizontal-stretch: 1;
-                            model: root.layouts;
-                            current-index: root.layout-index;
-                            selected => { root.set-layout(self.current-index); }
-                        }
-                    }
-                    for f[i] in root.fields: HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            width: 96px;
-                            text: f.label;
-                            font-size: 12px;
-                            vertical-alignment: center;
-                            color: Theme.text-color;
-                            overflow: elide;
-                        }
-                        LineEdit {
-                            horizontal-stretch: 1;
-                            text: f.value;
-                            edited(t) => { root.set-field(i, t); }
-                        }
-                        Text {
-                            width: 118px;
-                            text: f.hint;
+                            text: root.preset-index >= 0 ? "MAKE IT YOUR OWN" : "YOUR OWN DESIGN";
                             font-size: 11px;
-                            vertical-alignment: center;
+                            font-weight: 700;
                             color: Theme.muted-text-color;
                         }
-                    }
-                    if root.fields.length == 0: Text {
-                        text: "This layout has nothing to type into.";
-                        font-size: 12px;
-                        color: Theme.muted-text-color;
-                    }
-                    Text {
-                        text: root.hint;
-                        font-size: 11px;
-                        color: Theme.muted-text-color;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.error != "" ? root.error : root.status;
-                        font-size: 12px;
-                        color: root.error != "" ? Theme.error-color : Theme.ok-color;
-                        wrap: word-wrap;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                width: 96px;
+                                text: "Layout";
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                color: Theme.text-color;
+                            }
+                            ComboBox {
+                                horizontal-stretch: 1;
+                                model: root.layouts;
+                                current-index: root.layout-index;
+                                selected => { root.set-layout(self.current-index); }
+                            }
+                        }
+                        for f[i] in root.fields: HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                width: 96px;
+                                text: f.label;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                color: Theme.text-color;
+                                overflow: elide;
+                            }
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text: f.value;
+                                edited(t) => { root.set-field(i, t); }
+                            }
+                            Text {
+                                width: 118px;
+                                text: f.hint;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                color: Theme.muted-text-color;
+                            }
+                        }
+                        if root.autocomplete-field-index >= 0 && root.autocomplete-matches.length > 0: Rectangle {
+                            background: Theme.control-background;
+                            border-radius: 6px;
+                            border-width: 1px;
+                            border-color: Theme.accent;
+                            height: min(112px, root.autocomplete-matches.length * 26px + 32px);
+
+                            VerticalLayout {
+                                padding: 6px;
+                                spacing: 4px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: "INSERT VARIABLE";
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "(click to insert into field " + (root.autocomplete-field-index + 1) + ")";
+                                        font-size: 10px;
+                                        color: Theme.muted-text-color;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                ListView {
+                                    for v in root.autocomplete-matches: Rectangle {
+                                        height: 24px;
+                                        background: v_touch.has-hover ? Theme.selected-background : transparent;
+                                        border-radius: 3px;
+
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            spacing: 8px;
+
+                                            Text {
+                                                width: 100px;
+                                                text: v.key;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                                color: v_touch.has-hover ? Theme.selected-foreground : Theme.text-color;
+                                                vertical-alignment: center;
+                                            }
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: v.desc;
+                                                font-size: 10px;
+                                                color: v_touch.has-hover ? Theme.selected-foreground : Theme.muted-text-color;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: "e.g. " + v.sample;
+                                                font-size: 10px;
+                                                color: v_touch.has-hover ? Theme.selected-foreground : Theme.faint-text-color;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        v_touch := TouchArea {
+                                            clicked => {
+                                                root.select-autocomplete(root.autocomplete-field-index, v.key);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if root.fields.length == 0: Text {
+                            text: "This layout has nothing to type into.";
+                            font-size: 12px;
+                            color: Theme.muted-text-color;
+                        }
+                        if root.autocomplete-field-index < 0: Text {
+                            text: root.hint;
+                            font-size: 11px;
+                            color: Theme.muted-text-color;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.error != "" ? root.error : root.status;
+                            font-size: 12px;
+                            color: root.error != "" ? Theme.error-color : Theme.ok-color;
+                            wrap: word-wrap;
+                        }
                     }
                 }
             }

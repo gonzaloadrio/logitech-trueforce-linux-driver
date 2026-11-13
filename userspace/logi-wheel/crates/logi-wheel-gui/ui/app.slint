@@ -3,7 +3,7 @@ import { Theme } from "theme.slint";
 import { SettingRow, SettingsList } from "widgets.slint";
 import { CurveEditor, CurvePoint } from "curve_editor.slint";
 import { RgbStrip, LedColor } from "rgb_strip.slint";
-import { OledEditor, OledField, OledPreset, OledRow } from "oled_editor.slint";
+import { OledEditor, OledField, OledPreset, OledRow, OledVariable } from "oled_editor.slint";
 import { SlotTextEditor, SlotNameRow } from "slot_text.slint";
 import { Setup, SetupGame, SetupEffect, AddableGame } from "setup.slint";
 import { InfoPage, TestButton, TestAxis, TestCallout, TestPlanRow } from "info_page.slint";
@@ -395,12 +395,15 @@ export component App inherits Window {
     in property <int> oled-layout-index: 6;
     in property <[OledField]> oled-fields: [];
     in property <[OledRow]> oled-preview: [];
+    in property <[OledVariable]> oled-autocomplete-matches: [];
+    in property <int> oled-autocomplete-field-index: -1;
     in property <string> oled-error: "";
     in property <string> oled-frame: "";
     callback oled-set-preset(int);
     callback oled-use-in-games();
     callback oled-set-layout(int);
     callback oled-set-field(int, string);
+    callback oled-select-autocomplete(int, string);
     callback oled-send();
     callback oled-off();
     callback oled-close();
@@ -1027,12 +1030,15 @@ export component App inherits Window {
         layout-index: root.oled-layout-index;
         fields: root.oled-fields;
         preview: root.oled-preview;
+        autocomplete-matches: root.oled-autocomplete-matches;
+        autocomplete-field-index: root.oled-autocomplete-field-index;
         error: root.oled-error;
         frame: root.oled-frame;
         set-preset(i) => { root.oled-set-preset(i); }
         use-in-games() => { root.oled-use-in-games(); }
         set-layout(i) => { root.oled-set-layout(i); }
         set-field(i, t) => { root.oled-set-field(i, t); }
+        select-autocomplete(i, k) => { root.oled-select-autocomplete(i, k); }
         send() => { root.oled-send(); }
         off() => { root.oled-off(); }
         close() => { root.oled-close(); }

@@ -148,6 +148,70 @@ pub const SAMPLES: &[(&str, &str)] = &[
     ("{lap}", "14"),
 ];
 
+/// Telemetry variable metadata for autocompletion and variable pickers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableInfo {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub sample: &'static str,
+    pub desc: &'static str,
+}
+
+pub const VARIABLES: &[VariableInfo] = &[
+    VariableInfo { key: "{gear}", label: "Gear", sample: "3", desc: "Current gear (1..8, N, R)" },
+    VariableInfo { key: "{speed}", label: "Speed", sample: "142", desc: "Speed in km/h" },
+    VariableInfo { key: "{speed_mph}", label: "Speed (mph)", sample: "88", desc: "Speed in mph" },
+    VariableInfo { key: "{delta}", label: "Delta", sample: "-0.24", desc: "Lap time delta to best" },
+    VariableInfo { key: "{lap_time}", label: "Lap Time", sample: "1:42.35", desc: "Current / last lap time" },
+    VariableInfo { key: "{lap}", label: "Lap", sample: "14", desc: "Completed lap count" },
+    VariableInfo { key: "{rpm}", label: "RPM", sample: "6000", desc: "Engine RPM" },
+    VariableInfo { key: "{rpm_pct}", label: "RPM %", sample: "191", desc: "RPM gauge fill (0..255)" },
+    VariableInfo { key: "{throttle_pct}", label: "Throttle %", sample: "128", desc: "Throttle pedal fill (0..255)" },
+    VariableInfo { key: "{brake_pct}", label: "Brake %", sample: "255", desc: "Brake pedal fill (0..255)" },
+];
+
+/// If `text` contains an unclosed brace `{` (i.e. `{` with no closing `}` after it),
+/// returns the partial search term after `{` (e.g. `""` for `"{"`, or `"sp"` for `"{sp"`).
+pub fn unclosed_brace_prefix(text: &str) -> Option<&str> {
+    let pos = text.rfind('{')?;
+    let after = &text[pos + 1..];
+    if !after.contains('}') {
+        Some(after)
+    } else {
+        None
+    }
+}
+
+/// Find all variables whose key or label starts with or contains `prefix` (case-insensitive).
+/// If `prefix` is empty, returns all variables.
+pub fn matching_variables(prefix: &str) -> Vec<&'static VariableInfo> {
+    if prefix.is_empty() {
+        return VARIABLES.iter().collect();
+    }
+    let p_lower = prefix.to_lowercase();
+    VARIABLES
+        .iter()
+        .filter(|v| {
+            let key_stripped = v.key.trim_matches(|c| c == '{' || c == '}').to_lowercase();
+            key_stripped.contains(&p_lower) || v.label.to_lowercase().contains(&p_lower)
+        })
+        .collect()
+}
+
+/// Complete the unclosed `{...` in `text` with `key` (e.g. replacing `"{sp"` with `"{speed}"`).
+/// If there is no unclosed brace, appends `key`.
+pub fn complete_variable(text: &str, key: &str) -> String {
+    if let Some(pos) = text.rfind('{') {
+        let after = &text[pos + 1..];
+        if !after.contains('}') {
+            let mut result = text[..pos].to_string();
+            result.push_str(key);
+            return result;
+        }
+    }
+    format!("{text}{key}")
+}
+
 /// One line the apps show next to the fields.
 pub const PLACEHOLDER_HINT: &str =
     "Type {gear}, {speed}, {speed_mph}, {delta}, {lap_time}, {lap}, {rpm}, {rpm_pct}, {throttle_pct} or {brake_pct} in a field to fill it from the game.";
@@ -494,5 +558,25 @@ mod tests {
         let rows = preview(layout('C').unwrap(), &s(&["255"]));
         assert_eq!(rows[0].text, "################");
         assert!(preview(layout('A').unwrap(), &[]).is_empty());
+    }
+
+    #[test]
+    fn autocomplete_variables_matching_and_completion() {
+        assert_eq!(unclosed_brace_prefix("Speed: "), None);
+        assert_eq!(unclosed_brace_prefix("Speed: {gear}"), None);
+        assert_eq!(unclosed_brace_prefix("Speed: {"), Some(""));
+        assert_eq!(unclosed_brace_prefix("Speed: {sp"), Some("sp"));
+
+        let all = matching_variables("");
+        assert_eq!(all.len(), VARIABLES.len());
+
+        let sp = matching_variables("sp");
+        assert!(sp.iter().any(|v| v.key == "{speed}"));
+        assert!(sp.iter().any(|v| v.key == "{speed_mph}"));
+        assert!(!sp.iter().any(|v| v.key == "{gear}"));
+
+        assert_eq!(complete_variable("Speed: {", "{speed}"), "Speed: {speed}");
+        assert_eq!(complete_variable("{sp", "{speed_mph}"), "{speed_mph}");
+        assert_eq!(complete_variable("Lap: ", "{lap}"), "Lap: {lap}");
     }
 }
